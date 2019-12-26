@@ -1,5 +1,5 @@
 /**
- *  Inovelli Switch Red Series
+ *  Inovelli Dimmer Red Series LZW31-SN
  *  Author: Eric Maycock (erocm123)
  *  Date: 2019-12-03
  *
@@ -16,22 +16,26 @@
  *
  *  2019-12-03: Specify central scene command class version for upcoming Hubitat update.
  *
- *  2019-10-15: Ability to create child devices for local & rf protection to use in various automations.
- *              Device label is now displayed in logging. 
- * 
- *  2019-10-01: Adding the ability to set a custom color for the RGB indicator. Use a hue 360 color wheel.
- *              Adding the ability to enable z-wave "rf protection" to disable control from z-wave commands.
+ *  2019-11-16: Ability to choose custom LED bar color. Child devices to control default level (local & z-wave),
+ *              local & remote protection. Ability to turn on / off info & debug logging. Additional logging added.
+ *              Prevent overwriting parameters that are configured at the switch. Bumping number of notifications to 5.
+ *              Added additional button events for "released" vs "held". Button 8 pushed (up released)
+ *              & button 8 released (down released). Other bug fixes and improvements. 
  *
+ *  2019-11-13: Bug fix for not being able to set default level back to 0
  */
  
 metadata {
-    definition (name: "Inovelli Switch Red Series LZW30-SN", namespace: "InovelliUSA", author: "Eric Maycock", vid: "generic-switch", importUrl: "https://raw.githubusercontent.com/InovelliUSA/Hubitat/master/Drivers/inovelli-switch-red-series-lzw30-sn.src/inovelli-switch-red-series-lzw30-sn.groovy") {
+    definition (name: "Inovelli Dimmer Red Series LZW31-SN", namespace: "InovelliUSA", author: "Eric Maycock", vid: "generic-dimmer", importUrl:"https://raw.githubusercontent.com/InovelliUSA/Hubitat/master/Drivers/inovelli-dimmer-red-series-lzw31-sn.src/inovelli-dimmer-red-series-lzw31-sn.groovy") {
         capability "Switch"
         capability "Refresh"
+        capability "Polling"
         capability "Actuator"
         capability "Sensor"
+        //capability "Health Check"
         capability "PushableButton"
         capability "HoldableButton"
+        capability "Switch Level"
         capability "Configuration"
         capability "Energy Meter"
         capability "Power Meter"
@@ -52,19 +56,18 @@ metadata {
         command "pressDownX5"
         command "holdUp"
         command "holdDown"
-        command "pressConfig"
         
         command "childOn"
         command "childOff"
+        command "childSetLevel"
         command "childRefresh"
         command "reset"
         
         command "setAssociationGroup", ["number", "enum", "number", "number"] // group number, nodes, action (0 - remove, 1 - add), multi-channel endpoint (optional)
 
-        fingerprint mfr: "031E", prod: "0002", model: "0001", deviceJoinName: "Inovelli Switch Red Series" 
-        fingerprint deviceId: "0x1001", inClusters: "0x5E,0x6C,0x55,0x98,0x9F,0x22,0x70,0x85,0x59,0x86,0x32,0x72,0x5A,0x5B,0x73,0x75,0x7A"
-        fingerprint deviceId: "0x1001", inClusters: "0x5E,0x70,0x85,0x59,0x55,0x86,0x72,0x5A,0x73,0x32,0x5B,0x98,0x9F,0x25,0x6C,0x75,0x22,0x7A"
-        
+        fingerprint mfr: "031E", prod: "0001", model: "0001", deviceJoinName: "Inovelli Dimmer Red Series"
+        fingerprint deviceId: "0x1101", inClusters: "0x5E,0x55,0x98,0x9F,0x6C,0x22,0x26,0x70,0x85,0x59,0x86,0x32,0x72,0x5A,0x5B,0x73,0x75,0x7A" // Red Series
+        fingerprint deviceId: "0x1101", inClusters: "0x5E,0x26,0x70,0x85,0x59,0x55,0x86,0x72,0x5A,0x73,0x32,0x98,0x9F,0x5B,0x6C,0x75,0x22,0x7A" // Red Series
     }
 
     simulator {
@@ -73,6 +76,7 @@ metadata {
     preferences {
         generate_preferences()
     }
+
 }
 
 def generate_preferences()
@@ -86,27 +90,29 @@ def generate_preferences()
                     title:getParameterInfo(i, "name") + "\n" + getParameterInfo(i, "description") + "\nRange: " + getParameterInfo(i, "options") + "\nDefault: " + getParameterInfo(i, "default"),
                     range: getParameterInfo(i, "options")
                     //defaultValue: getParameterInfo(i, "default")
+                    //displayDuringSetup: "${it.@displayDuringSetup}"
             break
             case "enum":
                 input "parameter${i}", "enum",
-                    title:getParameterInfo(i, "name") + "\n" + getParameterInfo(i, "description"), 
+                    title:getParameterInfo(i, "name"), // + getParameterInfo(i, "description"),
                     //defaultValue: getParameterInfo(i, "default"),
+                    //displayDuringSetup: "${it.@displayDuringSetup}",
                     options: getParameterInfo(i, "options")
             break
-        }
-        if (i == 5){
-           input "parameter5custom", "number", 
-               title: "Custom LED RGB Value", 
-               description: "\nInput a custom value in this field to override the above setting. The value should be between 0 - 360 and can be determined by using the typical hue color wheel.", 
-               required: false,
-               range: "0..360"
+        }  
+        if (i == 13){
+            input "parameter13custom", "number", 
+                title: "Custom LED RGB Value", 
+                description: "\nInput a custom value in this field to override the above setting. The value should be between 0 - 360 and can be determined by using the typical hue color wheel.", 
+                required: false,
+                range: "0..360"
         }
     }
     
     input description: "When each notification set (Color, Level, Duration, Type) is configured, a switch child device is created that can be used in SmartApps to activate that notification.", title: "LED Notifications", displayDuringSetup: false, type: "paragraph", element: "paragraph"
     
     [1,2,3,4,5].each { i ->
-                input "parameter8-${i}a", "enum", title: "LED Effect Color - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
+                input "parameter16-${i}a", "enum", title: "LED Effect Color - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
                     0:"Red",
                     21:"Orange",
                     42:"Yellow",
@@ -115,7 +121,7 @@ def generate_preferences()
                     170:"Blue",
                     212:"Violet",
                     234:"Pink"]
-                input "parameter8-${i}b", "enum", title: "LED Effect Level - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
+                input "parameter16-${i}b", "enum", title: "LED Effect Level - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
                     0:"0%",
                     1:"10%",
                     2:"20%",
@@ -127,7 +133,7 @@ def generate_preferences()
                     8:"80%",
                     9:"90%",
                     10:"100%"]
-                input "parameter8-${i}c", "enum", title: "LED Effect Duration - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
+                input "parameter16-${i}c", "enum", title: "LED Effect Duration - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
                     1:"1 Second",
                     2:"2 Seconds",
                     3:"3 Seconds",
@@ -148,13 +154,13 @@ def generate_preferences()
                     64:"4 Minutes",
                     65:"5 Minutes",
                     255:"Indefinetly"]
-                input "parameter8-${i}d", "enum", title: "LED Effect Type - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
+                input "parameter16-${i}d", "enum", title: "LED Effect Type - Notification $i", description: "Tap to set", displayDuringSetup: false, required: false, options: [
                     0:"Off",
                     1:"Solid",
-                    //2:"Chase",
-                    2:"Fast Blink",
-                    3:"Slow Blink",
-                    4:"Pulse"]
+                    2:"Chase",
+                    3:"Fast Blink",
+                    4:"Slow Blink",
+                    5:"Pulse"]
     
     }
     input "disableLocal", "enum", title: "Disable Local Control", description: "\nDisable ability to control switch from the wall", required: false, options:[["1": "Yes"], ["0": "No"]], defaultValue: "0"
@@ -162,12 +168,20 @@ def generate_preferences()
     input description: "Use the below options to enable child devices for the specified settings. This will allow you to adjust these settings using SmartApps such as Smart Lighting. If any of the options are enabled, make sure you have the appropriate child device handlers installed.\n(Firmware 1.02+)", title: "Child Devices", displayDuringSetup: false, type: "paragraph", element: "paragraph"
     input "enableDisableLocalChild", "bool", title: "Disable Local Control", description: "", required: false, defaultValue: false
     input "enableDisableRemoteChild", "bool", title: "Disable Remote Control", description: "", required: false, defaultValue: false
+    input "enableDefaultLocalChild", "bool", title: "Default Level (Local)", description: "", required: false, defaultValue: false
+    input "enableDefaultZWaveChild", "bool", title: "Default Level (Z-Wave)", description: "", required: false, defaultValue: false
     input name: "debugEnable", type: "bool", title: "Enable debug logging", defaultValue: true
     input name: "infoEnable", type: "bool", title: "Enable informational logging", defaultValue: true
 }
 
 private channelNumber(String dni) {
     dni.split("-ep")[-1] as Integer
+}
+
+def logsOff(){
+    log.warn "${device.label?device.label:device.name}: Disabling logging after timeout"
+    device.updateSetting("debugEnable",[value:"false",type:"bool"])
+    device.updateSetting("infoEnable",[value:"false",type:"bool"])
 }
 
 private sendAlert(data) {
@@ -199,10 +213,19 @@ private toggleTiles(number, value) {
 
 def childSetLevel(String dni, value) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: childSetLevel($dni, $value)"
+    state.lastRan = now()
     def valueaux = value as Integer
     def level = Math.max(Math.min(valueaux, 99), 0)    
     def cmds = []
     switch (channelNumber(dni)) {
+        case 9:
+            cmds << new hubitat.device.HubAction(command(zwave.configurationV1.configurationSet(scaledConfigurationValue: value, parameterNumber: channelNumber(dni), size: 1) ), hubitat.device.Protocol.ZWAVE)
+            cmds << new hubitat.device.HubAction(command(zwave.configurationV1.configurationGet(parameterNumber: channelNumber(dni) )), hubitat.device.Protocol.ZWAVE)
+        break
+        case 10:
+            cmds << new hubitat.device.HubAction(command(zwave.configurationV1.configurationSet(scaledConfigurationValue: value, parameterNumber: channelNumber(dni), size: 1) ), hubitat.device.Protocol.ZWAVE)
+            cmds << new hubitat.device.HubAction(command(zwave.configurationV1.configurationGet(parameterNumber: channelNumber(dni) )), hubitat.device.Protocol.ZWAVE)
+        break
         case 101:
             cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionSet(localProtectionState : level > 0 ? 1 : 0, rfProtectionState: state.rfProtectionState? state.rfProtectionState:0) ), hubitat.device.Protocol.ZWAVE)
             cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionGet() ), hubitat.device.Protocol.ZWAVE)
@@ -217,10 +240,11 @@ def childSetLevel(String dni, value) {
 
 def childOn(String dni) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: childOn($dni)"
+    state.lastRan = now()
     def cmds = []
     if(channelNumber(dni).toInteger() <= 5) {
         toggleTiles("${channelNumber(dni)}", "on")
-        cmds << new hubitat.device.HubAction(command(setParameter(8, calculateParameter("8-${channelNumber(dni)}"), 4)), hubitat.device.Protocol.ZWAVE )
+        cmds << new hubitat.device.HubAction(command(setParameter(16, calculateParameter("16-${channelNumber(dni)}"), 4)), hubitat.device.Protocol.ZWAVE )
         return cmds
     } else {
         childSetLevel(dni, 99)
@@ -229,10 +253,11 @@ def childOn(String dni) {
 
 def childOff(String dni) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: childOff($dni)"
+    state.lastRan = now()
     def cmds = []
     if(channelNumber(dni).toInteger() <= 5) {
         toggleTiles("${channelNumber(dni)}", "off")
-        cmds << new hubitat.device.HubAction(command(setParameter(8, 0, 4)), hubitat.device.Protocol.ZWAVE )
+        cmds << new hubitat.device.HubAction(command(setParameter(16, 0, 4)), hubitat.device.Protocol.ZWAVE )
         return cmds
     } else {
         childSetLevel(dni, 0)
@@ -266,6 +291,7 @@ def configure() {
 def updated() {
     if (!state.lastRan || now() >= state.lastRan + 2000) {
         if (infoEnable) log.info "${device.label?device.label:device.name}: updated()"
+        if (debugEnable || infoEnable) runIn(1800,logsOff)
         state.lastRan = now()
         def cmds = initialize()
         if (cmds != [])
@@ -281,6 +307,44 @@ def initialize() {
     sendEvent(name: "checkInterval", value: 3 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zwave", hubHardwareId: device.hub.hardwareID, offlinePingable: "1"])
     sendEvent(name: "numberOfButtons", value: 8, displayed: true)
     
+    if (enableDefaultLocalChild && !childExists("ep9")) {
+    try {
+        addChildDevice("Switch Level Child Device", "${device.deviceNetworkId}-ep9", 
+                [completedSetup: true, label: "${device.displayName} (Default Local Level)",
+                isComponent: true, componentName: "ep9", componentLabel: "Default Local Level"])
+    } catch (e) {
+        runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the device handler for \"Switch Level Child Device\" is installed"]])
+    }
+    } else if (!enableDefaultLocalChild && childExists("ep9")) {
+        if (infoEnable) log.info "Trying to delete child device ep9. If this fails it is likely that there is a SmartApp using the child device in question."
+        def children = childDevices
+        def childDevice = children.find{it.deviceNetworkId.endsWith("ep9")}
+        try {
+            if (infoEnable) log.info "SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
+            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+        } catch (e) {
+            runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
+        }
+    }
+    if (enableDefaultZWaveChild && !childExists("ep10")) {
+    try {
+        addChildDevice("Switch Level Child Device", "${device.deviceNetworkId}-ep10", 
+                [completedSetup: true, label: "${device.displayName} (Default Z-Wave Level)",
+                isComponent: true, componentName: "ep10", componentLabel: "Default Z-Wave Level"])
+    } catch (e) {
+        runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the device handler for \"Switch Level Child Device\" is installed"]])
+    }
+    } else if (!enableDefaultLocalChild && childExists("ep10")) {
+        if (infoEnable) log.info "Trying to delete child device ep10. If this fails it is likely that there is a SmartApp using the child device in question."
+        def children = childDevices
+        def childDevice = children.find{it.deviceNetworkId.endsWith("ep10")}
+        try {
+            if (infoEnable) log.info "SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
+            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+        } catch (e) {
+            runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
+        }
+    }
     if (enableDisableLocalChild && !childExists("ep101")) {
     try {
         addChildDevice("Switch Level Child Device", "${device.deviceNetworkId}-ep101",
@@ -321,25 +385,26 @@ def initialize() {
     }
     
     [1,2,3,4,5].each { i ->
-    if ((settings."parameter8-${i}a"!=null && settings."parameter8-${i}b"!=null && settings."parameter8-${i}c"!=null && settings."parameter8-${i}d"!=null) && !childExists("ep${i}")) {
+    if ((settings."parameter16-${i}a"!=null && settings."parameter16-${i}b"!=null && settings."parameter16-${i}c"!=null && settings."parameter16-${i}d"!=null) && !childExists("ep${i}")) {
     try {
-        addChildDevice("Switch Child Device", "${device.deviceNetworkId}-ep${i}",
+        addChildDevice("Switch Child Device", "${device.deviceNetworkId}-ep${i}", 
                 [completedSetup: true, label: "${device.displayName} (Notification ${i})",
                 isComponent: true, componentName: "ep${i}", componentLabel: "Notification ${i}"])
     } catch (e) {
         runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the device handler for \"Switch Child Device\" is installed"]])
     }
-    } else if ((settings."parameter8-${i}a"==null || settings."parameter8-${i}b"==null || settings."parameter8-${i}c"==null || settings."parameter8-${i}d"==null) && childExists("ep${i}")) {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Trying to delete child device ep${i}. If this fails it is likely that there is a SmartApp using the child device in question."
+    } else if ((settings."parameter16-${i}a"==null || settings."parameter16-${i}b"==null || settings."parameter16-${i}c"==null || settings."parameter16-${i}d"==null) && childExists("ep${i}")) {
+        if (infoEnable) log.info "Trying to delete child device ep${i}. If this fails it is likely that there is a SmartApp using the child device in question."
         def children = childDevices
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep${i}")}
         try {
-            if (infoEnable) log.info "${device.label?device.label:device.name}: SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
+            if (infoEnable) log.info "SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
             //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
         } catch (e) {
             runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
         }
     }}
+    
     if (device.label != state.oldLabel) {
         def children = childDevices
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep1")}
@@ -352,6 +417,10 @@ def initialize() {
         if (childDevice) childDevice.setLabel("${device.displayName} (Notification 4)")
         childDevice = children.find{it.deviceNetworkId.endsWith("ep5")}
         if (childDevice) childDevice.setLabel("${device.displayName} (Notification 5)")
+        childDevice = children.find{it.deviceNetworkId.endsWith("ep9")}
+        if (childDevice) childDevice.setLabel("${device.displayName} (Default Local Level)")
+        childDevice = children.find{it.deviceNetworkId.endsWith("ep10")}
+        if (childDevice) childDevice.setLabel("${device.displayName} (Default Z-Wave Level)")
         childDevice = children.find{it.deviceNetworkId.endsWith("ep101")}
         if (childDevice) childDevice.setLabel("${device.displayName} (Disable Local Control)")
         childDevice = children.find{it.deviceNetworkId.endsWith("ep102")}
@@ -373,9 +442,8 @@ def initialize() {
     }
     
     cmds << zwave.versionV1.versionGet()
-
-    if ("${state.localProtectionState}" != "${settings.disableLocal}" || "${state.rfProtectionState}" != "${settings.disableRemote}") {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Setting local protection to ${disableLocal!=null? disableLocal.toInteger() : 0} & remote protection to ${disableRemote!=null? disableRemote.toInteger() : 0}"
+    
+    if (state.localProtectionState != settings.disableLocal || state.rfProtectionState != settings.disableRemote) {
         cmds << zwave.protectionV2.protectionSet(localProtectionState : disableLocal!=null? disableLocal.toInteger() : 0, rfProtectionState: disableRemote!=null? disableRemote.toInteger() : 0)
         cmds << zwave.protectionV2.protectionGet()
     }
@@ -386,15 +454,15 @@ def initialize() {
 def calculateParameter(number) {
     def value = 0
     switch (number){
-      case "5":
-          if (settings.parameter5custom =~ /^([0-9]{1}|[0-9]{2}|[0-9]{3})$/) value = settings.parameter5custom.toInteger() / 360 * 255
+      case "13":
+          if (settings.parameter13custom =~ /^([0-9]{1}|[0-9]{2}|[0-9]{3})$/) value = settings.parameter13custom.toInteger() / 360 * 255
           else value = settings."parameter${number}"
       break
-      case "8-1":
-      case "8-2":
-      case "8-3": 
-      case "8-4":
-      case "8-5":
+      case "16-1":
+      case "16-2":
+      case "16-3": 
+      case "16-4":
+      case "16-5":
          value += settings."parameter${number}a"!=null ? settings."parameter${number}a".toInteger() * 1 : 0
          value += settings."parameter${number}b"!=null ? settings."parameter${number}b".toInteger() * 256 : 0
          value += settings."parameter${number}c"!=null ? settings."parameter${number}c".toInteger() * 65536 : 0
@@ -416,94 +484,152 @@ def getParameter(number) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: Retreiving value of parameter $number"
     return zwave.configurationV1.configurationGet(parameterNumber: number)
 }
-
 def getParameterNumbers(){
-    return [1,2,3,4,5,6,7,10,11,12]
+    return [1,2,3,4,5,6,7,8,9,10,11,13,14,15,17,18,19,20,21,22]
 }
 
-def getParameterInfo(number, type){
+def getParameterInfo(number, value){
     def parameter = [:]
-
-    parameter.parameter1default=0
-    parameter.parameter2default=0
-    parameter.parameter3default=0
-    parameter.parameter4default=15
-    parameter.parameter5default=170
-    parameter.parameter6default=5
-    parameter.parameter7default=1
+    
+    parameter.parameter1default=3
+    parameter.parameter2default=101
+    parameter.parameter3default=101
+    parameter.parameter4default=101
+    parameter.parameter5default=1
+    parameter.parameter6default=99
+    parameter.parameter7default=0
     parameter.parameter8default=0
     parameter.parameter9default=0
-    parameter.parameter10default=10
-    parameter.parameter11default=3600
-    parameter.parameter12default=10
+    parameter.parameter10default=0
+    parameter.parameter11default=0
+    parameter.parameter12default=15
+    parameter.parameter13default=170
+    parameter.parameter14default=5
+    parameter.parameter15default=1
+    parameter.parameter16default=0
+    parameter.parameter17default=3
+    parameter.parameter18default=10
+    parameter.parameter19default=3600
+    parameter.parameter20default=10
+    parameter.parameter21default=1
+    parameter.parameter22default=0
     
-    parameter.parameter1type="enum"
-    parameter.parameter2type="enum"
+    parameter.parameter1type="number"
+    parameter.parameter2type="number"
     parameter.parameter3type="number"
     parameter.parameter4type="number"
-    parameter.parameter5type="enum"
-    parameter.parameter6type="enum"
+    parameter.parameter5type="number"
+    parameter.parameter6type="number"
     parameter.parameter7type="enum"
-    parameter.parameter8type="enum"
-    parameter.parameter9type="enum"
+    parameter.parameter8type="number"
+    parameter.parameter9type="number"
     parameter.parameter10type="number"
     parameter.parameter11type="number"
     parameter.parameter12type="number"
+    parameter.parameter13type="enum"
+    parameter.parameter14type="enum"
+    parameter.parameter15type="enum"
+    parameter.parameter16type="enum"
+    parameter.parameter17type="enum"
+    parameter.parameter18type="number"
+    parameter.parameter19type="number"
+    parameter.parameter20type="number"
+    parameter.parameter21type="enum"
+    parameter.parameter22type="enum"
     
     parameter.parameter1size=1
     parameter.parameter2size=1
-    parameter.parameter3size=2
+    parameter.parameter3size=1
     parameter.parameter4size=1
-    parameter.parameter5size=2
+    parameter.parameter5size=1
     parameter.parameter6size=1
     parameter.parameter7size=1
-    parameter.parameter8size=4
+    parameter.parameter8size=2
     parameter.parameter9size=1
     parameter.parameter10size=1
-    parameter.parameter11size=2
+    parameter.parameter11size=1
     parameter.parameter12size=1
+    parameter.parameter13size=2
+    parameter.parameter14size=1
+    parameter.parameter15size=1
+    parameter.parameter16size=4
+    parameter.parameter17size=1
+    parameter.parameter18size=1
+    parameter.parameter19size=2
+    parameter.parameter20size=1
+    parameter.parameter21size=1
+    parameter.parameter22size=1
     
-	parameter.parameter1options=["0":"Previous", "1":"On", "2":"Off"]
-    parameter.parameter2options=["1":"Yes", "0":"No"]
-    parameter.parameter3options="1..32767"
-    parameter.parameter4options="0..15"
-    parameter.parameter5options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink"]
-    parameter.parameter6options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
-    parameter.parameter7options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
-    parameter.parameter8options=["1":"Yes", "2":"No"]
-    parameter.parameter9options=["0":"Stay Off","1":"1 Second","2":"2 Seconds","3":"3 Seconds","4":"4 Seconds","5":"5 Seconds","6":"6 Seconds","7":"7 Seconds","8":"8 Seconds","9":"9 Seconds","10":"10 Seconds"]
+    parameter.parameter1options="0..100"
+    parameter.parameter2options="0..101"
+    parameter.parameter3options="0..101"
+    parameter.parameter4options="0..101"
+    parameter.parameter5options="1..45"
+    parameter.parameter6options="55..99"
+    parameter.parameter7options=["1":"Yes", "0":"No"]
+    parameter.parameter8options="0..32767"
+    parameter.parameter9options="0..100"
     parameter.parameter10options="0..100"
-    parameter.parameter11options="0..32767"
-    parameter.parameter12options="0..100"
+    parameter.parameter11options="0..100"
+    parameter.parameter12options="0..15"
+    parameter.parameter13options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink"]
+    parameter.parameter14options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
+    parameter.parameter15options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
+    parameter.parameter16options=["1":"Yes", "2":"No"]
+    parameter.parameter17options=["0":"Stay Off","1":"1 Second","2":"2 Seconds","3":"3 Seconds","4":"4 Seconds","5":"5 Seconds","6":"6 Seconds","7":"7 Seconds","8":"8 Seconds","9":"9 Seconds","10":"10 Seconds"]
+    parameter.parameter18options="0..100"
+    parameter.parameter19options="0..32767"
+    parameter.parameter20options="0..100"
+    parameter.parameter21options=["0":"Non Neutral", "1":"Neutral"]
+    parameter.parameter22options=["0":"Load Only", "1":"3-way Toggle", "2":"3-way Momentary"]
     
-    parameter.parameter1name="State After Power Restored"
-    parameter.parameter2name="Invert Switch"
-    parameter.parameter3name="Auto Off Timer"
-    parameter.parameter4name="Association Behavior"
-    parameter.parameter5name="LED Strip Color"
-    parameter.parameter6name="LED Strip Intensity"
-    parameter.parameter7name="LED Strip Intensity (When OFF)"
-    parameter.parameter8name="LED Strip Effect"
-    parameter.parameter9name="LED Strip Timeout"
-    parameter.parameter10name="Active Power Reports"
-    parameter.parameter11name="Periodic Power & Energy Reports"
-    parameter.parameter12name="Energy Reports"
+    parameter.parameter1name="Dimming Speed"
+    parameter.parameter2name="Dimming Speed (From Switch)"
+    parameter.parameter3name="Ramp Rate"
+    parameter.parameter4name="Ramp Rate (From Switch)"
+    parameter.parameter5name="Minimum Level"
+    parameter.parameter6name="Maximum Level"
+    parameter.parameter7name="Invert Switch"
+    parameter.parameter8name="Auto Off Timer"
+    parameter.parameter9name="Default Level (Local)"
+    parameter.parameter10name="Default Level (Z-Wave)"
+    parameter.parameter11name="State After Power Restored"
+    parameter.parameter12name="Association Behavior"
+    parameter.parameter13name="LED Strip Color"
+    parameter.parameter14name="LED Strip Intensity"
+    parameter.parameter15name="LED Strip Intensity (When OFF)"
+    parameter.parameter16name="LED Strip Effect"
+    parameter.parameter17name="LED Strip Timeout"
+    parameter.parameter18name="Active Power Reports"
+    parameter.parameter19name="Periodic Power & Energy Reports"
+    parameter.parameter20name="Energy Reports"
+    parameter.parameter21name="AC Power Type"
+    parameter.parameter22name="Switch Type"
     
+    parameter.parameter1description="This changes the speed in which the attached light dims up or down. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed."
+    parameter.parameter2description="This changes the speed in which the attached light dims up or down when controlled from the physical switch. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed. A setting of 101 should keep this in sync with parameter 1."
+    parameter.parameter3description="This changes the speed in which the attached light turns on or off. For example, when a user sends the switch a basicSet(value: 0xFF) or basicSet(value: 0x00), this is the speed in which those actions take place. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed. A setting of 101 should keep this in sync with parameter 1."
+    parameter.parameter4description="This changes the speed in which the attached light turns on or off from the physical switch. For example, when a user presses the up or down button, this is the speed in which those actions take place. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed. A setting of 101 should keep this in sync with parameter 1."
+    parameter.parameter5description="The minimum level that the dimmer allows the bulb to be dimmed to. Useful when the user has an LED bulb that does not turn on or flickers at a lower level."
+    parameter.parameter6description="The maximum level that the dimmer allows the bulb to be dimmed to. Useful when the user has an LED bulb that reaches its maximum level before the dimmer value of 99."
+    parameter.parameter7description="Inverts the orientation of the switch. Useful when the switch is installed upside down. Essentially up becomes down and down becomes up."
+    parameter.parameter8description="Automatically turns the switch off after this many seconds. When the switch is turned on a timer is started that is the duration of this setting. When the timer expires, the switch is turned off."
+    parameter.parameter9description="Default level for the dimmer when it is powered on from the local switch. A setting of 0 means that the switch will return to the level that it was on before it was turned off."
+    parameter.parameter10description="Default level for the dimmer when it is powered on from a Z-Wave command. A setting of 0 means that the switch will return to the level that it was on before it was turned off."
+    parameter.parameter11description="The state the switch should return to once power is restored after power failure. 0 = off, 1-99 = level, 100=previous."
+    parameter.parameter12description="When should the switch send commands to associated devices?\n\n01 - local\n02 - 3way\n03 - 3way & local\n04 - z-wave hub\n05 - z-wave hub & local\n06 - z-wave hub & 3-way\n07 - z-wave hub & local & 3way\n08 - timer\n09 - timer & local\n10 - timer & 3-way\n11 - timer & 3-way & local\n12 - timer & z-wave hub\n13 - timer & z-wave hub & local\n14 - timer & z-wave hub & 3-way\n15 - all"
+    parameter.parameter13description="This is the color of the LED strip."
+    parameter.parameter14description="This is the intensity of the LED strip."
+    parameter.parameter15description="This is the intensity of the LED strip when the switch is off. This is useful for users to see the light switch location when the lights are off."
+    parameter.parameter16description="LED Strip Effect"
+    parameter.parameter17description="When the LED strip is disabled (LED Strip Intensity is set to 0), this setting allows the LED strip to turn on temporarily while being adjusted."
+    parameter.parameter18description="The power level change that will result in a new power report being sent. The value is a percentage of the previous report. 0 = disabled."
+    parameter.parameter19description="Time period between consecutive power & energy reports being sent (in seconds). The timer is reset after each report is sent."
+    parameter.parameter20description="The energy level change that will result in a new energy report being sent. The value is a percentage of the previous report."
+    parameter.parameter21description="Configure the switch to use a neutral wire."
+    parameter.parameter22description="Configure the type of 3-way switch connected to the dimmer."
     
-    parameter.parameter1description="The state the switch should return to once power is restored after power failure."
-	parameter.parameter2description="Inverts the orientation of the switch. Useful when the switch is installed upside down. Essentially up becomes down and down becomes up."
-    parameter.parameter3description="Automatically turns the switch off after this many seconds. When the switch is turned on a timer is started that is the duration of this setting. When the timer expires, the switch is turned off."
-    parameter.parameter4description="When should the switch send commands to associated devices?\n\n01 - local\n02 - 3way\n03 - 3way & local\n04 - z-wave hub\n05 - z-wave hub & local\n06 - z-wave hub & 3-way\n07 - z-wave hub & local & 3way\n08 - timer\n09 - timer & local\n10 - timer & 3-way\n11 - timer & 3-way & local\n12 - timer & z-wave hub\n13 - timer & z-wave hub & local\n14 - timer & z-wave hub & 3-way\n15 - all"
-    parameter.parameter5description="This is the color of the LED strip."
-    parameter.parameter6description="This is the intensity of the LED strip."
-    parameter.parameter7description="This is the intensity of the LED strip when the switch is off. This is useful for users to see the light switch location when the lights are off."
-    parameter.parameter8description="LED Strip Effect"
-    parameter.parameter9description="When the LED strip is disabled (LED Strip Intensity is set to 0), this setting allows the LED strip to turn on temporarily while being adjusted."
-    parameter.parameter10description="The power level change that will result in a new power report being sent. The value is a percentage of the previous report. 0 = disabled."
-    parameter.parameter11description="Time period between consecutive power & energy reports being sent (in seconds). The timer is reset after each report is sent."
-    parameter.parameter12description="The energy level change that will result in a new energy report being sent. The value is a percentage of the previous report."
-    
-    return parameter."parameter${number}${type}"
+    return parameter."parameter${number}${value}"
 }
 
 def zwaveEvent(hubitat.zwave.commands.meterv3.MeterReport cmd) {
@@ -535,6 +661,25 @@ def zwaveEvent(hubitat.zwave.commands.configurationv1.ConfigurationReport cmd) {
         state."parameter${cmd.parameterNumber}value" = cmd2Integer(cmd.configurationValue)
     } else {
         if (infoEnable) log.debug "${device.label?device.label:device.name}: Configuration report received more than 60 seconds after running updated(). Possible configuration made at switch"
+    }
+    def integerValue = cmd2Integer(cmd.configurationValue)
+    switch (cmd.parameterNumber) {
+        case 9:
+            def children = childDevices
+            def childDevice = children.find{it.deviceNetworkId.endsWith("ep9")}
+            if (childDevice) {
+            childDevice.sendEvent(name: "switch", value: integerValue > 0 ? "on" : "off")
+            childDevice.sendEvent(name: "level", value: integerValue)            
+            }
+        break
+        case 10:
+            def children = childDevices
+            def childDevice = children.find{it.deviceNetworkId.endsWith("ep10")}
+            if (childDevice) {
+            childDevice.sendEvent(name: "switch", value: integerValue > 0 ? "on" : "off")
+            childDevice.sendEvent(name: "level", value: integerValue)
+            }
+        break
     }
 }
 
@@ -581,7 +726,7 @@ def integer2Cmd(value, size) {
 	break
 	}
     } catch (e) {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Error: integer2Cmd $e Value: $value"
+        if (debugEnable) log.debug "Error: integer2Cmd $e Value: $value"
     }
 }
 
@@ -606,9 +751,9 @@ def parse(description) {
         def cmd = zwave.parse(description, commandClassVersions)
         if (cmd) {
             result = zwaveEvent(cmd)
-            //if (debugEnable) log.debug("'$cmd' parsed to $result")
+            //log.debug("'$cmd' parsed to $result")
         } else {
-            if (debugEnable) log.debug("Couldn't zwave.parse '$description'")
+            if (debugEnable) log.debug "Couldn't zwave.parse '$description'" 
         }
     }
     def now
@@ -622,20 +767,37 @@ def parse(description) {
 
 def zwaveEvent(hubitat.zwave.commands.basicv1.BasicReport cmd) {
     if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
-    if (infoEnable) log.info "${device.label?device.label:device.name}: Basic report received with value of ${cmd.value ? "on" : "off"}"
-	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "physical")
+    if (infoEnable) log.info "${device.label?device.label:device.name}: Basic report received with value of ${cmd.value ? "on" : "off"} ($cmd.value)"
+    // Since SmartThings isn't filtering duplicate events, we are skipping these
+    // Switch is sending SwitchMultilevelReport as well (which we will use)
+    dimmerEvents(cmd)
 }
 
 def zwaveEvent(hubitat.zwave.commands.basicv1.BasicSet cmd) {
     if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Basic set received with value of ${cmd.value ? "on" : "off"}"
-	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "physical")
+    dimmerEvents(cmd)
 }
 
 def zwaveEvent(hubitat.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd) {
     if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Switch Binary report received with value of ${cmd.value ? "on" : "off"}"
-	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "digital")
+    dimmerEvents(cmd)
+}
+
+def zwaveEvent(hubitat.zwave.commands.switchmultilevelv3.SwitchMultilevelReport cmd) {
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
+    if (infoEnable) log.info "${device.label?device.label:device.name}: Switch Multilevel report received with value of ${cmd.value ? "on" : "off"} ($cmd.value)"
+    dimmerEvents(cmd)
+}
+
+private dimmerEvents(hubitat.zwave.Command cmd) {
+    def value = (cmd.value ? "on" : "off")
+    def result = [createEvent(name: "switch", value: value)]
+    if (cmd.value) {
+        result << createEvent(name: "level", value: cmd.value, unit: "%")
+    }
+    return result
 }
 
 def zwaveEvent(hubitat.zwave.commands.centralscenev1.CentralSceneNotification cmd) {
@@ -683,36 +845,52 @@ def reset() {
 def on() {
     if (infoEnable) log.info "${device.label?device.label:device.name}: on()"
     commands([
-        zwave.basicV1.basicSet(value: 0xFF)//,
-        //zwave.basicV1.basicGet()
+        zwave.switchMultilevelV1.switchMultilevelSet(value: 0xFF)//,
+        //zwave.switchMultilevelV1.switchMultilevelGet()
     ])
 }
 
 def off() {
     if (infoEnable) log.info "${device.label?device.label:device.name}: off()"
     commands([
-        zwave.basicV1.basicSet(value: 0x00)//,
+        zwave.switchMultilevelV1.switchMultilevelSet(value: 0x00)//,
+        //zwave.switchMultilevelV1.switchMultilevelGet()
+    ])
+}
+
+def setLevel(value) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: setLevel($value)"
+    commands([
+        zwave.basicV1.basicSet(value: value < 100 ? value : 99)//,
         //zwave.basicV1.basicGet()
     ])
 }
 
+def setLevel(value, duration) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: setLevel($value, $duration)"
+    def dimmingDuration = duration < 128 ? duration : 128 + Math.round(duration / 60)
+    commands([
+        zwave.switchMultilevelV2.switchMultilevelSet(value: value < 100 ? value : 99, dimmingDuration: dimmingDuration)//,
+        //zwave.switchMultilevelV1.switchMultilevelGet()
+    ])
+}
+
 def ping() {
-    if (infoEnable) log.info "${device.label?device.label:device.name}: ping()"
-    //refresh()
+    if (debugEnable) log.debug "ping()"
+    refresh()
 }
 
 def poll() {
-    if (infoEnable) log.info "${device.label?device.label:device.name}: poll()"
-    //refresh()
+    if (debugEnable) log.debug "poll()"
+    refresh()
 }
 
 def refresh() {
-    if (infoEnable) log.info "${device.label?device.label:device.name}: refresh()"
+    if (debugEnable) log.debug "refresh()"
     def cmds = []
-    cmds << zwave.basicV1.basicGet()
+    cmds << zwave.switchMultilevelV1.switchMultilevelGet()
     cmds << zwave.meterV3.meterGet(scale: 0)
 	cmds << zwave.meterV3.meterGet(scale: 2)
-    cmds << zwave.protectionV2.protectionGet()
     return commands(cmds)
 }
 
@@ -724,7 +902,7 @@ private command(hubitat.zwave.Command cmd) {
     }
 }
 
-private commands(commands, delay=500) {
+private commands(commands, delay=1000) {
     delayBetween(commands.collect{ command(it) }, delay)
 }
 
