@@ -1,9 +1,9 @@
 /**
  *  Inovelli Switch LZW30
  *  Author: Eric Maycock (erocm123)
- *  Date: 2019-12-03
+ *  Date: 2020-08-27
  *
- *  Copyright 2019 Eric Maycock / Inovelli
+ *  Copyright 2020 Eric Maycock / Inovelli
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -13,6 +13,51 @@
  *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
+ *
+ *  2020-08-27: Cleaning up device fingerprint info. 
+ *
+ *  2020-08-25: Adding componentSetColorTemperature to allow LED child device to change LED color to white.
+ *              If you set the color of child device it changes it to the specified RGB color. If you
+ *              set the color temperature it will change the LED to white.
+ *              If you update the driver for an already included device you will need to change the
+ *              child device driver to Generic Component RGBW.
+ *
+ *  2020-08-07: Fix for when setting the LED color via drop down to white the custom color field 
+ *              gets populated without user realizing it. 
+ *
+ *  2020-08-05: Adding S2 support for C-7 Hub. 
+ *
+ *  2020-07-06: Added a configuration parameter (51) that allows you to disable the 700ms delay when turing switch on/off from the wall.
+ *              Also adding white LED option to LED colors. Both of these require firmware 1.19+
+ *
+ *  2020-06-02: Change setColor to leave indicator level alone if level is not specified with command. 
+ *              LED Indicator child device now works with setLevel as well as setColor.
+ *
+ *  2020-05-13: Removed ColorControl capability as it was conflicting with some in-built Hubitat apps.
+ *              Added LED Color child device that can be used in its place.  
+ *
+ *  2020-05-05: Adding ColorControl capability to allow changing the LED bar color easily with setColor.
+ *              Adding preferences to automatically disable logs after x minutes. Previously the informational
+ *              logging would disable after 30 minutes without an option for the user.
+ *
+ *  2020-05-01: Correctly distinguish between digital and physical on / off.
+ *
+ *  2020-02-25: Switch over to using Hubitat child device drivers. Should still be backwards compatible with
+ *              Inovelli child drivers.
+ * 
+ *  2020-02-07: Update preferences when user changes parameter or disables relay from switch or from child device.
+ *
+ *  2020-02-06: Fix for remote control child device being created when it shouldn't be.
+ *              Fix for local protection being updated via hub after being changed with config button.
+ *
+ *  2020-02-05: Fix for LED turning off after 3 seconds when LED intensity (when off) is set to 0.
+ *              Extra button event added for those that want to distinguish held vs pushed. 
+ *              Button 8 pushed = Up button held. Button 8 held = Down button held.
+ *              Button 6 pushed = Up button released. Button 6 pushed = Down button released. 
+ *
+ *  2020-01-28: Update VersionReport parsing because of Hubitat change. Removing unnecessary reports.
+ *
+ *  2019-11-20: Fixed Association Group management.
  *
  *  2019-12-03: Specify central scene command class version for upcoming Hubitat update.
  *
@@ -35,17 +80,24 @@ metadata {
         attribute "lastActivity", "String"
         attribute "lastEvent", "String"
         attribute "firmware", "String"
+        attribute "groups", "Number"
         
+        command "childOn", ["string"]
+        command "childOff", ["string"]
+        command "childRefresh", ["string"]
+        command "componentOn"
+        command "componentOff"
+        command "componentSetLevel"
+        command "componentRefresh"
+        command "componentSetColor"
+        command "componentSetColorTemperature"
         
-        command "childOn"
-        command "childOff"
-        command "childRefresh"
-        
-        command "setAssociationGroup", ["number", "enum", "number", "number"] // group number, nodes, action (0 - remove, 1 - add), multi-channel endpoint (optional)
+        command "setAssociationGroup", [[name: "Group Number*",type:"NUMBER", description: "Provide the association group number to edit"], 
+                                        [name: "Z-Wave Node*", type:"STRING", description: "Enter the node number (in hex) associated with the node"], 
+                                        [name: "Action*", type:"ENUM", constraints: ["Add", "Remove"]],
+                                        [name:"Multi-channel Endpoint", type:"NUMBER", description: "Currently not implemented"]] 
 
-        fingerprint mfr: "031E", prod: "0004", model: "0001", deviceJoinName: "Inovelli Switch"
-        fingerprint deviceId: "0x1001", inClusters: "0x5E,0x70,0x85,0x59,0x55,0x86,0x72,0x5A,0x73,0x98,0x9F,0x25,0x6C,0x75,0x22,0x7A" 
-        fingerprint deviceId: "0x1001", inClusters: "0x5E,0x55,0x98,0x9F,0x6C,0x22,0x70,0x85,0x59,0x86,0x25,0x72,0x5A,0x5B,0x73,0x75,0x7A" 
+        fingerprint mfr: "031E", prod: "0004", deviceId: "0001", inClusters:"0x5E,0x70,0x85,0x59,0x55,0x86,0x72,0x5A,0x73,0x98,0x9F,0x25,0x6C,0x75,0x22,0x7A" 
     }
 
     simulator {
@@ -84,12 +136,15 @@ def generate_preferences()
         }
     }
     input "disableLocal", "enum", title: "Disable Local Control", description: "\nDisable ability to control switch from the wall", required: false, options:[["1": "Yes"], ["0": "No"]], defaultValue: "0"
-    input "disableRemote", "enum", title: "Disable Remote Control", description: "\nDisable ability to control switch from inside SmartThings", required: false, options:[["1": "Yes"], ["0": "No"]], defaultValue: "0"
-    input description: "Use the below options to enable child devices for the specified settings. This will allow you to adjust these settings using SmartApps such as Smart Lighting. If any of the options are enabled, make sure you have the appropriate child device handlers installed.\n(Firmware 1.02+)", title: "Child Devices", displayDuringSetup: false, type: "paragraph", element: "paragraph"
-    input "enableDisableLocalChild", "bool", title: "Disable Local Control", description: "", required: false, defaultValue: false
-    input "enableDisableRemoteChild", "bool", title: "Disable Remote Control", description: "", required: false, defaultValue: false
+    input "disableRemote", "enum", title: "Disable Remote Control", description: "\nDisable ability to control switch from inside Hubitat", required: false, options:[["1": "Yes"], ["0": "No"]], defaultValue: "0"
+    input description: "Use the below options to enable child devices for the specified settings. This will allow you to adjust these settings using Apps such as Rule Machine.", title: "Child Devices", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+    input "enableLEDChild", "bool", title: "Create \"LED Color\" Child Device", description: "", required: false, defaultValue: true
+    input "enableDisableLocalChild", "bool", title: "Create \"Disable Local Control\" Child Device", description: "", required: false, defaultValue: false
+    input "enableDisableRemoteChild", "bool", title: "Create \"Disable Remote Control\" Child Device", description: "", required: false, defaultValue: false
     input name: "debugEnable", type: "bool", title: "Enable debug logging", defaultValue: true
     input name: "infoEnable", type: "bool", title: "Enable informational logging", defaultValue: true
+    input name: "disableDebugLogging", type: "number", title: "Disable Debug Logging", description: "Disable debug logging after this number of minutes (0=Do not disable)", defaultValue: 0
+    input name: "disableInfoLogging", type: "number", title: "Disable Info Logging", description: "Disable info logging after this number of minutes (0=Do not disable)", defaultValue: 30
 }
 
 private channelNumber(String dni) {
@@ -97,7 +152,6 @@ private channelNumber(String dni) {
 }
 
 private sendAlert(data) {
-    if (infoEnable) log.info "${device.label?device.label:device.name}: Error while creating child device"
     sendEvent(
         descriptionText: data.message,
         eventType: "ALERT",
@@ -107,6 +161,62 @@ private sendAlert(data) {
     )
 }
 
+def debugLogsOff(){
+    log.warn "${device.label?device.label:device.name}: Disabling debug logging after timeout"
+    device.updateSetting("debugEnable",[value:"false",type:"bool"])
+}
+
+def infoLogsOff(){
+    log.warn "${device.label?device.label:device.name}: Disabling info logging after timeout"
+    device.updateSetting("infoEnable",[value:"false",type:"bool"])
+}
+
+def componentSetColor(cd,value) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentSetColor($value)"
+	if (value.hue == null || value.saturation == null) return
+	def ledColor = Math.round(huePercentToZwaveValue(value.hue))
+	if (infoEnable) log.info "${device.label?device.label:device.name}: Setting LED color value to $ledColor & LED intensity to $ledLevel"
+    def cmds = []
+    if (value.level != null) {
+        def ledLevel = Math.round(value.level/10)
+        cmds << setParameter(6, ledLevel, 1)
+        cmds << getParameter(6)
+    }
+    cmds << setParameter(5, ledColor, 2)
+    cmds << getParameter(5)
+    return commands(cmds)
+}
+
+def componentSetColorTemperature(cd, value) {
+    if (infoEnable != "false") log.info "${device.label?device.label:device.name}: cd, componentSetColorTemperature($value)"
+    if (infoEnable) log.info "${device.label?device.label:device.name}: Setting LED color value to 255"
+    state.colorTemperature = value
+    def cmds = []
+    cmds << setParameter(5, 255, 2)
+    cmds << getParameter(5)
+    if(cmds) commands(cmds)
+}
+
+private huePercentToValue(value){
+    return value<=2?0:(value>=98?360:value/100*360)
+}
+
+private hueValueToZwaveValue(value){
+    return value<=2?0:(value>=356?255:value/360*255)
+}
+
+private huePercentToZwaveValue(value){
+    return value<=2?0:(value>=98?254:value/100*255)
+}
+
+private zwaveValueToHueValue(value){
+    return value<=2?0:(value>=254?360:value/255*360)
+}
+
+private zwaveValueToHuePercent(value){
+    return value<=2?0:(value>=254?100:value/255*100)
+}
+
 def childSetLevel(String dni, value) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: childSetLevel($dni, $value)"
     def valueaux = value as Integer
@@ -114,15 +224,19 @@ def childSetLevel(String dni, value) {
     def cmds = []
     switch (channelNumber(dni)) {
         case 101:
-            cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionSet(localProtectionState : level > 0 ? 1 : 0, rfProtectionState: state.rfProtectionState? state.rfProtectionState:0) ), hubitat.device.Protocol.ZWAVE)
-            cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionGet() ), hubitat.device.Protocol.ZWAVE)
+            cmds << zwave.protectionV2.protectionSet(localProtectionState : level > 0 ? 1 : 0, rfProtectionState: state.rfProtectionState? state.rfProtectionState:0)
+            cmds << zwave.protectionV2.protectionGet()
         break
         case 102:
-            cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionSet(localProtectionState : state.localProtectionState? state.localProtectionState:0, rfProtectionState : level > 0 ? 1 : 0) ), hubitat.device.Protocol.ZWAVE)
-            cmds << new hubitat.device.HubAction(command(zwave.protectionV2.protectionGet() ), hubitat.device.Protocol.ZWAVE)
+            cmds << zwave.protectionV2.protectionSet(localProtectionState : state.localProtectionState? state.localProtectionState:0, rfProtectionState : level > 0 ? 1 : 0)
+            cmds << zwave.protectionV2.protectionGet()
+        break
+        case 103:
+            cmds << setParameter(6, Math.round(level/10), 1)
+            cmds << getParameter(6)
         break
     }
-	return cmds
+	return commands(cmds)
 }
 
 private toggleTiles(number, value) {
@@ -169,6 +283,25 @@ def childRefresh(String dni) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: childRefresh($dni)"
 }
 
+def componentOn(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentOn($cd)"
+    return childOn(cd.deviceNetworkId)
+}
+
+def componentOff(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentOff($cd)"
+    return childOff(cd.deviceNetworkId)
+}
+
+void componentRefresh(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentRefresh($cd)"
+}
+
+def componentSetLevel(cd,level,transitionTime = null) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentSetLevel($cd, $value)"
+	return childSetLevel(cd.deviceNetworkId,level)
+}
+
 def childExists(ep) {
     def children = childDevices
     def childDevice = children.find{it.deviceNetworkId.endsWith(ep)}
@@ -192,6 +325,8 @@ def configure() {
 def updated() {
     if (!state.lastRan || now() >= state.lastRan + 2000) {
         if (infoEnable) log.info "${device.label?device.label:device.name}: updated()"
+        if (debugEnable && disableDebugLogging) runIn(disableDebugLogging*60,debugLogsOff)
+        if (infoEnable && disableInfoLogging) runIn(disableInfoLogging*60,infoLogsOff)
         state.lastRan = now()
         def cmds = initialize()
         if (cmds != [])
@@ -203,76 +338,75 @@ def updated() {
     }
 }
 
+private addChild(id, label, namespace, driver, isComponent){
+    if(!childExists(id)){
+        try {
+            def newChild = addChildDevice(namespace, driver, "${device.deviceNetworkId}-${id}", 
+                    [completedSetup: true, label: "${device.displayName} (${label})",
+                    isComponent: isComponent, componentName: id, componentLabel: label])
+            newChild.sendEvent(name:"switch", value:"off")
+        } catch (e) {
+            runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the driver for \"${driver}\" with a namespace of ${namespace} is installed"]])
+        }
+    }
+}
+
+private deleteChild(id){
+    if(childExists(id)){
+        def childDevice = childDevices.find{it.deviceNetworkId.endsWith(id)}
+        try {
+            if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+        } catch (e) {
+            if (infoEnable) log.info "Hubitat may have issues trying to delete the child device when it is in use. Need to manually delete them."
+            runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any App."]])
+        }
+    }
+}
+
 def initialize() {
-    sendEvent(name: "checkInterval", value: 3 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zwave", hubHardwareId: device.hub.hardwareID, offlinePingable: "1"])
-    
-    if (enableDisableLocalChild && !childExists("ep101")) {
-    try {
-        addChildDevice("Switch Level Child Device", "${device.deviceNetworkId}-ep101",
-                [completedSetup: true, label: "${device.displayName} (Disable Local Control)",
-                isComponent: true, componentName: "ep101", componentLabel: "Disable Local Control"])
-    } catch (e) {
-        runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the device handler for \"Switch Level Child Device\" is installed"]])
-    }
-    } else if (!enableDisableLocalChild && childExists("ep101")) {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Trying to delete child device ep101. If this fails it is likely that there is a SmartApp using the child device in question."
-        def children = childDevices
-        def childDevice = children.find{it.deviceNetworkId.endsWith("ep101")}
-        try {
-            if (infoEnable) log.info "${device.label?device.label:device.name}: SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
-            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
-        } catch (e) {
-            runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
-        }
-    }
-    if (enableDisableRemoteChild && !childExists("ep102")) {
-    try {
-        addChildDevice("Switch Level Child Device", "${device.deviceNetworkId}-ep102", 
-                [completedSetup: true, label: "${device.displayName} (Disable Remote Control)",
-                isComponent: true, componentName: "ep102", componentLabel: "Disable Remote Control"])
-    } catch (e) {
-        runIn(3, "sendAlert", [data: [message: "Child device creation failed. Make sure the device handler for \"Switch Level Child Device\" is installed"]])
-    }
-    } else if (!enableDisableRemoteChild && childExists("ep102")) {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Trying to delete child device ep101. If this fails it is likely that there is a SmartApp using the child device in question."
-        def children = childDevices
-        def childDevice = children.find{it.deviceNetworkId.endsWith("ep102")}
-        try {
-            if (infoEnable) log.info "${device.label?device.label:device.name}: SmartThings has issues trying to delete the child device when it is in use. Need to manually delete them."
-            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
-        } catch (e) {
-            runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
-        }
-    }
+    if (enableDisableLocalChild) addChild("ep101", "Disable Local Control", "hubitat", "Generic Component Switch", false)
+    else deleteChild("ep101")
+    if (enableDisableRemoteChild) addChild("ep102", "Disable Remote Control", "hubitat", "Generic Component Switch", false)
+    else deleteChild("ep102")
+    if (enableLEDChild) addChild("ep103", "LED Color", "hubitat", "Generic Component RGBW", false)
+    else deleteChild("ep103")
     
     if (device.label != state.oldLabel) {
         def children = childDevices
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep101")}
-        if (childDevice) childDevice.setLabel("${device.displayName} (Disable Local Control)")
+        if (childDevice)
+        childDevice.setLabel("${device.displayName} (Disable Local Control)")
         childDevice = children.find{it.deviceNetworkId.endsWith("ep102")}
-        if (childDevice) childDevice.setLabel("${device.displayName} (Disable Remote Control)")
-        state.oldLabel = device.label
+        if (childDevice)
+        childDevice.setLabel("${device.displayName} (Disable Remote Control)")
     }
+    state.oldLabel = device.label
     
     def cmds = processAssociations()
     
     getParameterNumbers().each{ i ->
       if ((state."parameter${i}value" != ((settings."parameter${i}"!=null||calculateParameter(i)!=null)? calculateParameter(i).toInteger() : getParameterInfo(i, "default").toInteger()))){
-          if (infoEnable) log.info "Parameter $i is not set correctly. Setting it to ${settings."parameter${i}"!=null? calculateParameter(i).toInteger() : getParameterInfo(i, "default").toInteger()}."
           cmds << setParameter(i, (settings."parameter${i}"!=null||calculateParameter(i)!=null)? calculateParameter(i).toInteger() : getParameterInfo(i, "default").toInteger(), getParameterInfo(i, "size").toInteger())
           cmds << getParameter(i)
       }
       else {
-          if (infoEnable) log.info "${device.label?device.label:device.name}: Parameter $i already set"
+          //if (infoEnable) log.info "${device.label?device.label:device.name}: Parameter already set"
       }
     }
     
+    if (state."parameter9value" != 0){
+        cmds << zwave.configurationV1.configurationSet(scaledConfigurationValue: 0, parameterNumber: 9, size: 1)
+        cmds << zwave.configurationV1.configurationGet(parameterNumber: 9)
+    }
+    
     cmds << zwave.versionV1.versionGet()
-
-    if ("${state.localProtectionState}" != "${settings.disableLocal}" || "${state.rfProtectionState}" != "${settings.disableRemote}") {
-        if (infoEnable) log.info "${device.label?device.label:device.name}: Setting local protection to ${disableLocal!=null? disableLocal.toInteger() : 0} & remote protection to ${disableRemote!=null? disableRemote.toInteger() : 0}"
+    
+    if (state.localProtectionState?.toInteger() != settings.disableLocal?.toInteger() || state.rfProtectionState?.toInteger() != settings.disableRemote?.toInteger()) {
+        if (infoEnable) log.info "${device.label?device.label:device.name}: Protection command class settings need to be updated"
         cmds << zwave.protectionV2.protectionSet(localProtectionState : disableLocal!=null? disableLocal.toInteger() : 0, rfProtectionState: disableRemote!=null? disableRemote.toInteger() : 0)
         cmds << zwave.protectionV2.protectionGet()
+    } else {
+        if (infoEnable) log.info "${device.label?device.label:device.name}: No Protection command class settings to update"
     }
 
     if (cmds != []) return cmds else return []
@@ -282,7 +416,7 @@ def calculateParameter(number) {
     def value = 0
     switch (number){
       case "5":
-          if (settings.parameter5custom =~ /^([0-9]{1}|[0-9]{2}|[0-9]{3})$/) value = settings.parameter5custom.toInteger() / 360 * 255
+          if (settings.parameter5custom =~ /^([0-9]{1}|[0-9]{2}|[0-9]{3})$/) value = hueValueToZwaveValue(settings.parameter5custom.toInteger())
           else value = settings."parameter${number}"
       break
       case "8-1":
@@ -313,7 +447,7 @@ def getParameter(number) {
 }
 
 def getParameterNumbers(){
-    return [1,2,3,4,5,6,7]
+    return [1,2,3,4,5,6,7,13,51]
 }
 
 def getParameterInfo(number, type){
@@ -331,6 +465,8 @@ def getParameterInfo(number, type){
     parameter.parameter10default=10
     parameter.parameter11default=3600
     parameter.parameter12default=10
+    parameter.parameter13default=0
+    parameter.parameter51default=1
     
     parameter.parameter1type="enum"
     parameter.parameter2type="enum"
@@ -344,6 +480,8 @@ def getParameterInfo(number, type){
     parameter.parameter10type="number"
     parameter.parameter11type="number"
     parameter.parameter12type="number"
+    parameter.parameter13type="enum"
+    parameter.parameter51type="enum"
     
     parameter.parameter1size=1
     parameter.parameter2size=1
@@ -357,12 +495,14 @@ def getParameterInfo(number, type){
     parameter.parameter10size=1
     parameter.parameter11size=2
     parameter.parameter12size=1
+    parameter.parameter13size=1
+    parameter.parameter51size=1
     
 	parameter.parameter1options=["0":"Previous", "1":"On", "2":"Off"]
     parameter.parameter2options=["1":"Yes", "0":"No"]
     parameter.parameter3options="1..32767"
     parameter.parameter4options="0..15"
-    parameter.parameter5options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink"]
+    parameter.parameter5options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink", "255":"White (Firmware 1.19+)"]
     parameter.parameter6options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
     parameter.parameter7options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
     parameter.parameter8options=["1":"Yes", "2":"No"]
@@ -370,6 +510,8 @@ def getParameterInfo(number, type){
     parameter.parameter10options="0..100"
     parameter.parameter11options="0..32767"
     parameter.parameter12options="0..100"
+    parameter.parameter13options=["0":"Default", "1":"Special Load (T8)"]
+    parameter.parameter51options=["0":"Yes", "1":"No (Default)"]
     
     parameter.parameter1name="State After Power Restored"
     parameter.parameter2name="Invert Switch"
@@ -383,6 +525,8 @@ def getParameterInfo(number, type){
     parameter.parameter10name="Active Power Reports"
     parameter.parameter11name="Periodic Power & Energy Reports"
     parameter.parameter12name="Energy Reports"
+    parameter.parameter13name="Load Type"
+    parameter.parameter51name="Disable Physical On/Off Delay"
     
     parameter.parameter1description="The state the switch should return to once power is restored after power failure."
 	parameter.parameter2description="Inverts the orientation of the switch. Useful when the switch is installed upside down. Essentially up becomes down and down becomes up."
@@ -396,6 +540,8 @@ def getParameterInfo(number, type){
     parameter.parameter10description="The power level change that will result in a new power report being sent. The value is a percentage of the previous report. 0 = disabled."
     parameter.parameter11description="Time period between consecutive power & energy reports being sent (in seconds). The timer is reset after each report is sent."
     parameter.parameter12description="The energy level change that will result in a new energy report being sent. The value is a percentage of the previous report."
+    parameter.parameter13description="The default of the switch is to auto detect the load. In some situations you may want to try the option for a special load type. (firmware 1.17+)"
+    parameter.parameter51description="The 700ms delay that occurs after pressing the physical button to turn the switch on/off is removed. (firmware 1.19+)"
     
     return parameter."parameter${number}${type}"
 }
@@ -403,10 +549,31 @@ def getParameterInfo(number, type){
 def zwaveEvent(hubitat.zwave.commands.configurationv1.ConfigurationReport cmd) {
     if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: parameter '${cmd.parameterNumber}' with a byte size of '${cmd.size}' is set to '${cmd2Integer(cmd.configurationValue)}'"
-    if (!state.lastRan || now() <= state.lastRan + 60000) {
-        state."parameter${cmd.parameterNumber}value" = cmd2Integer(cmd.configurationValue)
-    } else {
-        if (infoEnable) log.debug "${device.label?device.label:device.name}: Configuration report received more than 60 seconds after running updated(). Possible configuration made at switch"
+    def integerValue = cmd2Integer(cmd.configurationValue)
+    state."parameter${cmd.parameterNumber}value" = cmd2Integer(cmd.configurationValue)
+    switch (cmd.parameterNumber) {
+        case 5:
+            if(integerValue==0||integerValue==21||integerValue==42||integerValue==85||integerValue==127||integerValue==170||integerValue==212||integerValue==234||integerValue==255){
+                device.updateSetting("parameter${cmd.parameterNumber}",[value:"${integerValue}",type:"number"])
+                device.removeSetting("parameter${cmd.parameterNumber}custom")
+            } else {
+                device.removeSetting("parameter${cmd.parameterNumber}")
+                device.updateSetting("parameter${cmd.parameterNumber}custom",[value:Math.round(zwaveValueToHueValue(integerValue)),type:"number"])
+            }
+            def childDevice = childDevices.find{it.deviceNetworkId.endsWith("ep103")}
+            if (childDevice) {
+                childDevice.sendEvent(name:"hue", value:"${Math.round(zwaveValueToHuePercent(integerValue))}")
+                childDevice.sendEvent(name:"saturation", value:"100")
+            }
+        break
+        case 6:
+            device.updateSetting("parameter${cmd.parameterNumber}",[value:"${integerValue}",type:"enum"])
+            def childDevice = childDevices.find{it.deviceNetworkId.endsWith("ep103")}
+            if (childDevice) {
+                childDevice.sendEvent(name:"level", value:"${integerValue*10}")
+                childDevice.sendEvent(name:"switch", value:"${integerValue==0?"off":"on"}")
+            }
+        break
     }
 }
 
@@ -493,21 +660,21 @@ def parse(description) {
 }
 
 def zwaveEvent(hubitat.zwave.commands.basicv1.BasicReport cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Basic report received with value of ${cmd.value ? "on" : "off"}"
-	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "physical")
+	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "digital")
 }
 
 def zwaveEvent(hubitat.zwave.commands.basicv1.BasicSet cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Basic set received with value of ${cmd.value ? "on" : "off"}"
 	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "physical")
 }
 
 def zwaveEvent(hubitat.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Switch Binary report received with value of ${cmd.value ? "on" : "off"}"
-	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "digital")
+	createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "physical")
 }
 
 def zwaveEvent(hubitat.zwave.Command cmd) {
@@ -550,11 +717,35 @@ def refresh() {
 }
 
 private command(hubitat.zwave.Command cmd) {
-    if (state.sec) {
-        zwave.securityV1.securityMessageEncapsulation().encapsulate(cmd).format()
-    } else {
-        cmd.format()
+    if (getDataValue("zwaveSecurePairingComplete") != "true") {
+        return cmd.format()
     }
+    Short S2 = getDataValue("S2")?.toInteger()
+    String encap = ""
+    String keyUsed = "S0"
+    if (S2 == null) { //S0 existing device
+        encap = "988100"
+    } else if ((S2 & 0x04) == 0x04) { //S2_ACCESS_CONTROL
+        keyUsed = "S2_ACCESS_CONTROL"
+        encap = "9F0304"
+    } else if ((S2 & 0x02) == 0x02) { //S2_AUTHENTICATED
+        keyUsed = "S2_AUTHENTICATED"
+        encap = "9F0302"
+    } else if ((S2 & 0x01) == 0x01) { //S2_UNAUTHENTICATED
+        keyUsed = "S2_UNAUTHENTICATED"
+        encap = "9F0301"
+    } else if ((S2 & 0x80) == 0x80) { //S0 on C7
+        encap = "988100"
+    }
+    return "${encap}${cmd.format()}"
+}
+
+void zwaveEvent(hubitat.zwave.commands.supervisionv1.SupervisionGet cmd){
+    hubitat.zwave.Command encapCmd = cmd.encapsulatedCommand(commandClassVersions)
+    if (encapCmd) {
+        zwaveEvent(encapCmd)
+    }
+    sendHubCommand(new hubitat.device.HubAction(command(zwave.supervisionV1.supervisionReport(sessionID: cmd.sessionID, reserved: 0, moreStatusUpdates: false, status: 0xFF, duration: 0)), hubitat.device.Protocol.ZWAVE))
 }
 
 private commands(commands, delay=500) {
@@ -562,52 +753,73 @@ private commands(commands, delay=500) {
 }
 
 def setDefaultAssociations() {
-    def smartThingsHubID = (zwaveHubNodeId.toString().format( '%02x', zwaveHubNodeId )).toUpperCase()
+    def smartThingsHubID = String.format('%02x', zwaveHubNodeId).toUpperCase()
     state.defaultG1 = [smartThingsHubID]
     state.defaultG2 = []
     state.defaultG3 = []
 }
 
 def setAssociationGroup(group, nodes, action, endpoint = null){
-    if (!state."desiredAssociation${group}") {
-        state."desiredAssociation${group}" = nodes
-    } else {
+    // Normalize the arguments to be backwards compatible with the old method
+    action = "${action}" == "1" ? "Add" : "${action}" == "0" ? "Remove" : "${action}" // convert 1/0 to Add/Remove
+    group  = "${group}" =~ /\d+/ ? (group as int) : group                             // convert group to int (if possible)
+    nodes  = [] + nodes ?: [nodes]                                                    // convert to collection if not already a collection
+
+    if (! nodes.every { it =~ /[0-9A-F]+/ }) {
+        log.error "${device.label?device.label:device.name}: invalid Nodes ${nodes}"
+        return
+    }
+
+    if (group < 1 || group > maxAssociationGroup()) {
+        log.error "${device.label?device.label:device.name}: Association group is invalid 1 <= ${group} <= ${maxAssociationGroup()}"
+        return
+    }
+    
+    def associations = state."desiredAssociation${group}"?:[]
+    nodes.each { 
+        node = "${it}"
         switch (action) {
-            case 0:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" - nodes
+            case "Remove":
+            if (infoEnable) log.info "${device.label?device.label:device.name}: Removing node ${node} from association group ${group}"
+            associations = associations - node
             break
-            case 1:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" + nodes
+            case "Add":
+            if (infoEnable) log.info "${device.label?device.label:device.name}: Adding node ${node} to association group ${group}"
+            associations << node
             break
         }
     }
+    state."desiredAssociation${group}" = associations.unique()
+    return
+}
+
+def maxAssociationGroup(){
+   if (!state.associationGroups) {
+       if (infoEnable) log.info "${device.label?device.label:device.name}: Getting supported association groups from device"
+       sendHubCommand(new hubitat.device.HubAction(command(zwave.associationV2.associationGroupingsGet()), hubitat.device.Protocol.ZWAVE )) // execute the update immediately
+   }
+   (state.associationGroups?: 5) as int
 }
 
 def processAssociations(){
    def cmds = []
    setDefaultAssociations()
-   def associationGroups = 5
-   if (state.associationGroups) {
-       associationGroups = state.associationGroups
-   } else {
-       if (infoEnable) log.info "${device.label?device.label:device.name}: Getting supported association groups from device"
-       cmds <<  zwave.associationV2.associationGroupingsGet()
-   }
+   def associationGroups = maxAssociationGroup()
    for (int i = 1; i <= associationGroups; i++){
       if(state."actualAssociation${i}" != null){
          if(state."desiredAssociation${i}" != null || state."defaultG${i}") {
             def refreshGroup = false
             ((state."desiredAssociation${i}"? state."desiredAssociation${i}" : [] + state."defaultG${i}") - state."actualAssociation${i}").each {
-                if (it != null){
+                if (it){
                     if (infoEnable) log.info "${device.label?device.label:device.name}: Adding node $it to group $i"
-                    cmds << zwave.associationV2.associationSet(groupingIdentifier:i, nodeId:Integer.parseInt(it,16))
+                    cmds << zwave.associationV2.associationSet(groupingIdentifier:i, nodeId:hubitat.helper.HexUtils.hexStringToInt(it))
                     refreshGroup = true
                 }
             }
             ((state."actualAssociation${i}" - state."defaultG${i}") - state."desiredAssociation${i}").each {
-                if (it != null){
+                if (it){
                     if (infoEnable) log.info "${device.label?device.label:device.name}: Removing node $it from group $i"
-                    cmds << zwave.associationV2.associationRemove(groupingIdentifier:i, nodeId:Integer.parseInt(it,16))
+                    cmds << zwave.associationV2.associationRemove(groupingIdentifier:i, nodeId:hubitat.helper.HexUtils.hexStringToInt(it))
                     refreshGroup = true
                 }
             }
@@ -623,7 +835,7 @@ def processAssociations(){
 }
 
 def zwaveEvent(hubitat.zwave.commands.associationv2.AssociationReport cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     def temp = []
     if (cmd.nodeId != []) {
        cmd.nodeId.each {
@@ -636,17 +848,22 @@ def zwaveEvent(hubitat.zwave.commands.associationv2.AssociationReport cmd) {
 }
 
 def zwaveEvent(hubitat.zwave.commands.associationv2.AssociationGroupingsReport cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     sendEvent(name: "groups", value: cmd.supportedGroupings)
     if (infoEnable) log.info "${device.label?device.label:device.name}: Supported association groups: ${cmd.supportedGroupings}"
     state.associationGroups = cmd.supportedGroupings
 }
 
 def zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd) {
-    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
+    if (debugEnable) log.debug "${device.label?device.label:device.name}: ${cmd}"
     if(cmd.applicationVersion != null && cmd.applicationSubVersion != null) {
 	    def firmware = "${cmd.applicationVersion}.${cmd.applicationSubVersion.toString().padLeft(2,'0')}"
         if (infoEnable) log.info "${device.label?device.label:device.name}: Firmware report received: ${firmware}"
+        state.needfwUpdate = "false"
+        createEvent(name: "firmware", value: "${firmware}")
+    } else if(cmd.firmware0Version != null && cmd.firmware0SubVersion != null) {
+	    def firmware = "${cmd.firmware0Version}.${cmd.firmware0SubVersion.toString().padLeft(2,'0')}"
+        if (infoEnable != false) log.info "${device.label?device.label:device.name}: Firmware report received: ${firmware}"
         state.needfwUpdate = "false"
         createEvent(name: "firmware", value: "${firmware}")
     }
@@ -655,14 +872,10 @@ def zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd) {
 def zwaveEvent(hubitat.zwave.commands.protectionv2.ProtectionReport cmd) {
     if (debugEnable) log.debug "${device.label?device.label:device.name}: ${device.label?device.label:device.name}: ${cmd}"
     if (infoEnable) log.info "${device.label?device.label:device.name}: Protection report received: Local protection is ${cmd.localProtectionState > 0 ? "on" : "off"} & Remote protection is ${cmd.rfProtectionState > 0 ? "on" : "off"}"
-    if (!state.lastRan || now() <= state.lastRan + 60000) {
-        state.localProtectionState = cmd.localProtectionState
-        state.rfProtectionState = cmd.rfProtectionState
-    } else {
-        if (infoEnable) log.debug "${device.label?device.label:device.name}: Protection report received more than 60 seconds after running updated(). Possible configuration made at switch"
-    }
-    //device.updateSetting("disableLocal",[value:cmd.localProtectionState?cmd.localProtectionState:0,type:"enum"])
-    //device.updateSetting("disableRemote",[value:cmd.rfProtectionState?cmd.rfProtectionState:0,type:"enum"])
+    state.localProtectionState = cmd.localProtectionState
+    state.rfProtectionState = cmd.rfProtectionState
+    device.updateSetting("disableLocal",[value:cmd.localProtectionState?"1":"0",type:"enum"])
+    device.updateSetting("disableRemote",[value:cmd.rfProtectionState?"1":"0",type:"enum"])
     def children = childDevices
     def childDevice = children.find{it.deviceNetworkId.endsWith("ep101")}
     if (childDevice) {

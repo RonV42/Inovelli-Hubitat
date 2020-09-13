@@ -1,9 +1,9 @@
 /**
  *  Inovelli 2-Channel Outdoor Smart Plug NZW97
  *  Author: Eric Maycock (erocm123)
- *  Date: 2018-05-02
+ *  Date: 2020-08-25
  *
- *  Copyright 2018 Eric Maycock
+ *  Copyright 2020 Eric Maycock / Inovelli
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -13,6 +13,12 @@
  *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
+ *
+ *  2020-08-25: Cleanup SwitchBinaryReport for root endpoint.
+ *
+ *  2020-06-26: Specify which command class versions to use. Remove extra commands. Switch to using Hubitat built in child drivers.
+ *
+ *  2019-11-20: Fixed Association Group management.
  *
  *  2018-05-02: Added support for Z-Wave Association Tool SmartApp. Associations require firmware 1.02+.
  *              https://github.com/erocm123/SmartThingsPublic/tree/master/smartapps/erocm123/z-waveat
@@ -37,16 +43,24 @@ metadata {
         attribute "lastActivity", "String"
         attribute "lastEvent", "String"
         
-        command "setAssociationGroup", ["number", "enum", "number", "number"] // group number, nodes, action (0 - remove, 1 - add), multi-channel endpoint (optional)
+        command "setAssociationGroup", [[name: "Group Number*",type:"NUMBER", description: "Provide the association group number to edit"], 
+                                        [name: "Z-Wave Node*", type:"STRING", description: "Enter the node number (in hex) associated with the node"], 
+                                        [name: "Action*", type:"ENUM", constraints: ["Add", "Remove"]],
+                                        [name:"Multi-channel Endpoint", type:"NUMBER", description: "Currently not implemented"]] 
+
         command "childOn"
         command "childOff"
         command "childRefresh"
+        command "componentOn"
+        command "componentOff"
+        command "componentRefresh"
 
         fingerprint manufacturer: "015D", prod: "6100", model: "6100", deviceJoinName: "Inovelli 2-Channel Outdoor Smart Plug"
         fingerprint manufacturer: "0312", prod: "6100", model: "6100", deviceJoinName: "Inovelli 2-Channel Outdoor Smart Plug"
         fingerprint manufacturer: "015D", prod: "0221", model: "611C", deviceJoinName: "Inovelli 2-Channel Outdoor Smart Plug"
         fingerprint manufacturer: "0312", prod: "0221", model: "611C", deviceJoinName: "Inovelli 2-Channel Outdoor Smart Plug"
         fingerprint deviceId: "0x1101", inClusters: "0x5E,0x25,0x27,0x85,0x8E,0x59,0x55,0x86,0x72,0x5A,0x73,0x70,0x71,0x60,0x6C,0x7A"
+        fingerprint deviceId: "0x1101", inClusters: "0x5E,0x25,0x85,0x8E,0x59,0x55,0x86,0x72,0x5A,0x73,0x70,0x71,0x60,0x6C,0x7A"
     }
     
     simulator {}
@@ -81,9 +95,23 @@ metadata {
         }
     }
 }
+
+private getCommandClassVersions() {
+	[
+     0x20: 1, // Basic
+     0x25: 1, // Switch Binary
+     0x70: 2, // Configuration
+     0x60: 3, // Multi Channel
+     0x8E: 2, // Multi Channel Association
+     0x72: 2, // Manufacturer Specific
+     0x85: 2, // Association
+     0x86: 1, // Version
+    ]
+}
+
 def parse(String description) {
     def result = []
-    def cmd = zwave.parse(description)
+    def cmd = zwave.parse(description, commandClassVersions)
     if (cmd) {
         result += zwaveEvent(cmd)
         log.debug "Parsed ${cmd} to ${result.inspect()}"
@@ -137,33 +165,15 @@ def zwaveEvent(hubitat.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd, ep 
             it.deviceNetworkId == "$device.deviceNetworkId-ep$ep"
         }
         if (childDevice) childDevice.sendEvent(name: "switch", value: cmd.value ? "on" : "off")
-        if (cmd.value) {
-            event = [createEvent([name: "switch", value: "on"])]
-        } else {
-            def allOff = true
-            childDevices.each {
-                n->
-                    if (n.deviceNetworkId != "$device.deviceNetworkId-ep$ep" && n.currentState("switch").value != "off") allOff = false
-            }
-            if (allOff) {
-                event = [createEvent([name: "switch", value: "off"])]
-            } else {
-                event = [createEvent([name: "switch", value: "on"])]
-            }
-        }
-        return event
     } else {
         def result = createEvent(name: "switch", value: cmd.value ? "on" : "off", type: "digital")
-        def cmds = []
-        cmds << encap(zwave.switchBinaryV1.switchBinaryGet(), 1)
-        cmds << encap(zwave.switchBinaryV1.switchBinaryGet(), 2)
-        return [result, response(commands(cmds))] // returns the result of reponse()
+        return [result] // returns the result of reponse()
     }
 }
 
 def zwaveEvent(hubitat.zwave.commands.multichannelv3.MultiChannelCmdEncap cmd) {
     log.debug "MultiChannelCmdEncap ${cmd}"
-    def encapsulatedCommand = cmd.encapsulatedCommand([0x32: 3, 0x25: 1, 0x20: 1])
+    def encapsulatedCommand = cmd.encapsulatedCommand(commandClassVersions)
     if (encapsulatedCommand) {
         zwaveEvent(encapsulatedCommand, cmd.sourceEndPoint as Integer)
     }
@@ -185,18 +195,18 @@ def zwaveEvent(hubitat.zwave.Command cmd) {
 def on() {
     log.debug "on()"
     commands([
-            zwave.switchAllV1.switchAllOn(),
-            encap(zwave.switchBinaryV1.switchBinaryGet(), 1),
-            encap(zwave.switchBinaryV1.switchBinaryGet(), 2)
+            //zwave.switchAllV1.switchAllOn(),
+            encap(zwave.basicV1.basicSet(value: 0xFF), 1),
+            encap(zwave.basicV1.basicSet(value: 0xFF), 2)
     ])
 }
 
 def off() {
     log.debug "off()"
     commands([
-            zwave.switchAllV1.switchAllOff(),
-            encap(zwave.switchBinaryV1.switchBinaryGet(), 1),
-            encap(zwave.switchBinaryV1.switchBinaryGet(), 2)
+            //zwave.switchAllV1.switchAllOff(),
+            encap(zwave.basicV1.basicSet(value: 0x00), 1),
+            encap(zwave.basicV1.basicSet(value: 0x00), 2)
     ])
 }
 
@@ -204,7 +214,7 @@ def childOn(String dni) {
     log.debug "childOn($dni)"
     def cmds = []
     cmds << new hubitat.device.HubAction(command(encap(zwave.basicV1.basicSet(value: 0xFF), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
-    cmds << new hubitat.device.HubAction(command(encap(zwave.switchBinaryV1.switchBinaryGet(), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
+    //cmds << new hubitat.device.HubAction(command(encap(zwave.switchBinaryV1.switchBinaryGet(), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
     cmds
 }
 
@@ -212,7 +222,7 @@ def childOff(String dni) {
     log.debug "childOff($dni)"
     def cmds = []
     cmds << new hubitat.device.HubAction(command(encap(zwave.basicV1.basicSet(value: 0x00), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
-    cmds << new hubitat.device.HubAction(command(encap(zwave.switchBinaryV1.switchBinaryGet(), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
+    //cmds << new hubitat.device.HubAction(command(encap(zwave.switchBinaryV1.switchBinaryGet(), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
     cmds
 }
 
@@ -221,6 +231,21 @@ def childRefresh(String dni) {
     def cmds = []
     cmds << new hubitat.device.HubAction(command(encap(zwave.switchBinaryV1.switchBinaryGet(), channelNumber(dni))), hubitat.device.Protocol.ZWAVE)
     cmds
+}
+
+def componentOn(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentOn($cd)"
+    return childOn(cd.deviceNetworkId)
+}
+
+def componentOff(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentOff($cd)"
+    return childOff(cd.deviceNetworkId)
+}
+
+def componentRefresh(cd) {
+    if (infoEnable) log.info "${device.label?device.label:device.name}: componentRefresh($cd)"
+    return childRefresh(cd.deviceNetworkId)
 }
 
 def poll() {
@@ -340,7 +365,7 @@ private command(hubitat.zwave.Command cmd) {
     }
 }
 
-private commands(commands, delay = 1000) {
+private commands(commands, delay = 500) {
     delayBetween(commands.collect {
         command(it)
     }, delay)
@@ -352,63 +377,84 @@ private channelNumber(String dni) {
 private void createChildDevices() {
     state.oldLabel = device.label
     for (i in 1..2) {
-        addChildDevice("Switch Child Device", "${device.deviceNetworkId}-ep${i}", [completedSetup: true, label: "${device.displayName} (CH${i})",
+        addChildDevice("hubitat", "Generic Component Switch", "${device.deviceNetworkId}-ep${i}", [completedSetup: true, label: "${device.displayName} (CH${i})",
             isComponent: false, componentName: "ep$i", componentLabel: "Channel $i"
         ])
     }
 }
 
 def setDefaultAssociations() {
-    def smartThingsHubID = zwaveHubNodeId.toString().format( '%02x', zwaveHubNodeId )
+    def smartThingsHubID = String.format('%02x', zwaveHubNodeId).toUpperCase()
     state.defaultG1 = [smartThingsHubID]
-    state.defaultG2 = [smartThingsHubID]
+    state.defaultG2 = []
     state.defaultG3 = []
 }
 
 def setAssociationGroup(group, nodes, action, endpoint = null){
-    if (!state."desiredAssociation${group}") {
-        state."desiredAssociation${group}" = nodes
-    } else {
+    // Normalize the arguments to be backwards compatible with the old method
+    action = "${action}" == "1" ? "Add" : "${action}" == "0" ? "Remove" : "${action}" // convert 1/0 to Add/Remove
+    group  = "${group}" =~ /\d+/ ? (group as int) : group                             // convert group to int (if possible)
+    nodes  = [] + nodes ?: [nodes]                                                    // convert to collection if not already a collection
+
+    if (! nodes.every { it =~ /[0-9A-F]+/ }) {
+        log.error "invalid Nodes ${nodes}"
+        return
+    }
+
+    if (group < 1 || group > maxAssociationGroup()) {
+        log.error "Association group is invalid 1 <= ${group} <= ${maxAssociationGroup()}"
+        return
+    }
+    
+    def associations = state."desiredAssociation${group}"?:[]
+    nodes.each { 
+        node = "${it}"
         switch (action) {
-            case 0:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" - nodes
+            case "Remove":
+            if (logEnable) log.debug "Removing node ${node} from association group ${group}"
+            associations = associations - node
             break
-            case 1:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" + nodes
+            case "Add":
+            if (logEnable) log.debug "Adding node ${node} to association group ${group}"
+            associations << node
             break
         }
     }
+    state."desiredAssociation${group}" = associations.unique()
+    return
+}
+
+def maxAssociationGroup(){
+   if (!state.associationGroups) {
+       if (logEnable) log.debug "Getting supported association groups from device"
+       zwave.associationV2.associationGroupingsGet() // execute the update immediately
+   }
+   (state.associationGroups?: 5) as int
 }
 
 def processAssociations(){
    def cmds = []
    setDefaultAssociations()
-   def associationGroups = 5
-   if (state.associationGroups) {
-       associationGroups = state.associationGroups
-   } else {
-       log.debug "Getting supported association groups from device"
-       cmds <<  zwave.associationV2.associationGroupingsGet()
-   }
+   def associationGroups = maxAssociationGroup()
    for (int i = 1; i <= associationGroups; i++){
       if(state."actualAssociation${i}" != null){
          if(state."desiredAssociation${i}" != null || state."defaultG${i}") {
             def refreshGroup = false
             ((state."desiredAssociation${i}"? state."desiredAssociation${i}" : [] + state."defaultG${i}") - state."actualAssociation${i}").each {
-                log.debug "Adding node $it to group $i"
-                cmds << zwave.associationV2.associationSet(groupingIdentifier:i, nodeId:Integer.parseInt(it,16))
+                if (logEnable) log.debug "Adding node $it to group $i"
+                cmds << zwave.associationV2.associationSet(groupingIdentifier:i, nodeId:hubitat.helper.HexUtils.hexStringToInt(it))
                 refreshGroup = true
             }
             ((state."actualAssociation${i}" - state."defaultG${i}") - state."desiredAssociation${i}").each {
-                log.debug "Removing node $it from group $i"
-                cmds << zwave.associationV2.associationRemove(groupingIdentifier:i, nodeId:Integer.parseInt(it,16))
+                if (logEnable) log.debug "Removing node $it from group $i"
+                cmds << zwave.associationV2.associationRemove(groupingIdentifier:i, nodeId:hubitat.helper.HexUtils.hexStringToInt(it))
                 refreshGroup = true
             }
             if (refreshGroup == true) cmds << zwave.associationV2.associationGet(groupingIdentifier:i)
-            else log.debug "There are no association actions to complete for group $i"
+            else if (logEnable) log.debug "There are no association actions to complete for group $i"
          }
       } else {
-         log.debug "Association info not known for group $i. Requesting info from device."
+         if (logEnable) log.debug "Association info not known for group $i. Requesting info from device."
          cmds << zwave.associationV2.associationGet(groupingIdentifier:i)
       }
    }
