@@ -360,7 +360,7 @@ def initialize() {
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep8")}
         try {
             if (logEnable) log.debug "Hubitat has issues trying to delete the child device when it is in use. Need to manually delete them."
-            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+            if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
         } catch (e) {
             runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
         }
@@ -379,7 +379,7 @@ def initialize() {
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep9")}
         try {
             if (logEnable) log.debug "Hubitat has issues trying to delete the child device when it is in use. Need to manually delete them."
-            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+            if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
         } catch (e) {
             runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
         }
@@ -398,7 +398,7 @@ def initialize() {
         def childDevice = children.find{it.deviceNetworkId.endsWith("ep101")}
         try {
             if (logEnable) log.debug "Hubitat has issues trying to delete the child device when it is in use. Need to manually delete them."
-            //if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
+            if(childDevice) deleteChildDevice(childDevice.deviceNetworkId)
         } catch (e) {
             runIn(3, "sendAlert", [data: [message: "Failed to delete child device. Make sure the device is not in use by any SmartApp."]])
         }
